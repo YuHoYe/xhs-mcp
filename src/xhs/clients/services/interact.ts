@@ -323,9 +323,43 @@ export class InteractService {
   }
 
   /**
-   * 查找评论元素，支持滚动加载
+   * 展开所有折叠的子评论
+   * 点击页面上所有"共X条回复"、"展开更多回复"等按钮，让隐藏的子评论可见
+   */
+  private async expandAllSubComments(page: any): Promise<number> {
+    let expandedCount = 0;
+    const maxRounds = 10;
+
+    for (let round = 0; round < maxRounds; round++) {
+      const clicked = await page.evaluate(() => {
+        let count = 0;
+        const allEls = document.querySelectorAll('span, a, div, button');
+        allEls.forEach((el) => {
+          const text = (el.textContent || '').trim();
+          if (/^(共\d+条回复|展开\d+条回复|查看更多回复|展开更多|展开)$/.test(text)) {
+            (el as HTMLElement).click();
+            count++;
+          }
+        });
+        document.querySelectorAll('.show-more-comment, .expand-reply, [class*="show-more"]').forEach((btn) => {
+          (btn as HTMLElement).click();
+          count++;
+        });
+        return count;
+      });
+
+      expandedCount += clicked;
+      if (clicked === 0) break;
+      await sleep(1000);
+    }
+
+    return expandedCount;
+  }
+
+  /**
+   * 查找评论元素，支持滚动加载和展开折叠子评论
    * 参考 reference project 的 findCommentElement 实现
-   * 关键：先在当前视图查找，再滚动加载
+   * 增强：在滚动过程中自动展开折叠的子评论
    */
   private async findCommentElement(page: any, commentId: string): Promise<any> {
     const maxAttempts = 50;
@@ -350,10 +384,14 @@ export class InteractService {
     });
     await sleep(1000);
 
-    // 滚动后再次尝试查找
+    // 展开当前可见的折叠子评论
+    const expandedInitial = await this.expandAllSubComments(page);
+    this.logger.debug('初始展开折叠子评论', { expandedCount: expandedInitial });
+
+    // 展开后再次尝试查找
     el = await page.$(selector);
     if (el) {
-      this.logger.debug('滚动到评论区后找到评论');
+      this.logger.debug('展开子评论后找到评论');
       return el;
     }
 
@@ -397,6 +435,9 @@ export class InteractService {
         window.scrollBy(0, window.innerHeight * 0.8);
       });
       await sleep(scrollInterval);
+
+      // 每次滚动后展开新出现的折叠子评论
+      await this.expandAllSubComments(page);
 
       // 滚动后立即查找（边滚动边查找）
       el = await page.$(selector);
